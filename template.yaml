@@ -1,28 +1,54 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: My Textract Stack
+Description: Full Textract Pipeline - S3, SQS, Lambda, and DynamoDB
 
-Resources:  # <--- Make sure this has ZERO spaces before it
-  MyDocumentBucket:
+Resources:
+  # 1. SQS Queue (The Message Buffer)
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+
+  # 2. Queue Policy (Allows S3 to talk to the Queue)
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref ProcessingQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: s3.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt ProcessingQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub "arn:aws:s3:::textract-uploads-${AWS::AccountId}"
+
+  # 3. S3 Bucket (The Upload Trigger)
+  DocumentBucket:
     Type: AWS::S3::Bucket
+    DependsOn: QueuePolicy
     Properties:
       BucketName: !Sub "textract-uploads-${AWS::AccountId}"
-  
-  # 1. The "Brain" (The Lambda Function)
-  TextractProcessorFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.9
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          def handler(event, context):
-              print("Hello! I will process Textract here soon.")
-              return {"statusCode": 200}
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt ProcessingQueue.Arn
 
-  # 2. The Permissions (IAM Role)
+  # 4. DynamoDB Table (The Database)
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ExtractedTextData
+      AttributeDefinitions:
+        - AttributeName: DocumentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: DocumentId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # 5. IAM Role (The Lambda's Permission Badge)
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -34,16 +60,24 @@ Resources:  # <--- Make sure this has ZERO spaces before it
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonTextractFullAccess
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
-        - arn:aws:iam::aws:policy/AmazonSQSFullAccess
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  # 3. The Connection (SQS triggers Lambda)
-  LambdaSQSEventSource:
-    Type: AWS::Lambda::EventSourceMapping
+  # 6. Lambda Function (The Brain)
+  TextractProcessorFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      BatchSize: 10
-      EventSourceArn: !GetAtt MyProcessingQueue.Arn
-      FunctionName: !Ref TextractProcessorFunction
+      FunctionName: TextractProcessor
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          def handler(event, context):
