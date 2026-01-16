@@ -1,12 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Full Textract Pipeline - Cleaned Version
+Description: Full Textract Pipeline - Zero Conflict Version
 
 Resources:
   # 1. THE QUEUE
   ProcessingQueue:
     Type: AWS::SQS::Queue
     Properties:
-      VisibilityTimeout: 90 # Increased to give Lambda more time
+      VisibilityTimeout: 90
 
   # 2. THE QUEUE POLICY
   QueuePolicy:
@@ -21,26 +21,23 @@ Resources:
             Action: sqs:SendMessage
             Resource: !GetAtt ProcessingQueue.Arn
             Condition:
-              ArnEquals:
-                aws:SourceArn: !Sub "arn:aws:s3:::textract-uploads-${AWS::AccountId}"
+              ArnLike:
+                aws:SourceArn: "arn:aws:s3:::*"
 
-  # 3. THE BUCKET
+  # 3. THE BUCKET (Letting AWS pick the name)
   DocumentBucket:
     Type: AWS::S3::Bucket
     DependsOn: QueuePolicy
     Properties:
-      # Using a very unique name to avoid collisions
-      BucketName: !Sub "textract-data-drop-${AWS::AccountId}"
       NotificationConfiguration:
         QueueConfigurations:
           - Event: s3:ObjectCreated:*
             Queue: !GetAtt ProcessingQueue.Arn
 
-  # 4. THE TABLE
+  # 4. THE TABLE (Letting AWS pick the name)
   ResultsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "TextractResults-${AWS::StackName}"
       AttributeDefinitions:
         - AttributeName: DocumentId
           AttributeType: S
@@ -49,7 +46,7 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
-  # 5. THE ROLE (Added a slight delay/dependency helper)
+  # 5. THE ROLE
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -66,7 +63,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
 
-  # 6. THE LAMBDA (Removed manual FunctionName)
+  # 6. THE LAMBDA
   TextractProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -77,9 +74,8 @@ Resources:
       Code:
         ZipFile: |
           import json
-          import boto3
           def handler(event, context):
-              print("Ready to process Textract!")
+              print("System Online")
               return {'statusCode': 200}
 
   # 7. THE TRIGGER
