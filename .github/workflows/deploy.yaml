@@ -1,31 +1,91 @@
-name: AWS CloudFormation Deploy
-# Some comments for Git to allow the commit aaaaaaaa
-on:
-  push:
-    branches: [ main ] # This triggers the deploy when you push to the main branch
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Textract Pipeline - Final Attempt
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      # 1. Pulls your code from the GitHub repository
-      - name: Checkout code
-        uses: actions/checkout@v4
+Resources:
+  # 1. SQS Queue
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 120
 
-      # 2. Authenticates with AWS using your stored Secrets
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+  # 2. SQS Policy - Open permission to break the circular link
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref ProcessingQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: 
+              Service: "s3.amazonaws.com"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt ProcessingQueue.Arn
 
-      # 3. Deploys the CloudFormation template
-      - name: Deploy to AWS CloudFormation
-        uses: aws-actions/aws-cloudformation-github-deploy@v1
-        with:
-          name: TextractStack
-          template: template.yaml
-          no-fail-on-empty-changeset: "1"
-          # These capabilities allow AWS to create the IAM Role and the named Lambda function
-          capabilities: CAPABILITY_IAM, CAPABILITY_NAMED_IAM
+  # 3. S3 Bucket - Random name by AWS
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+
+  # 4. S3 Notification - Separated to prevent creation errors
+  BucketNotification:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "s3:*"
+            Resource: !Sub "arn:aws:s3:::${DocumentBucket}/*"
+
+  # 5. DynamoDB Table
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: DocumentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: DocumentId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # 6. IAM Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonTextractFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+  # 7. Lambda Function
+  TextractProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              print("Ready!")
+              return {"statusCode": 200}
+
+  # 8. SQS -> Lambda Link
+  LambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt ProcessingQueue.Arn
+      FunctionName: !Ref TextractProcessorFunction
