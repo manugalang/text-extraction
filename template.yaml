@@ -1,4 +1,13 @@
-# 1. The "Brain" (The Lambda Function)
+AWSTemplateFormatVersion: '2010-09-09'
+Description: My Textract Stack
+
+Resources:  # <--- Make sure this has ZERO spaces before it
+  MyDocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "textract-uploads-${AWS::AccountId}"
+  
+  # 1. The "Brain" (The Lambda Function)
   TextractProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
