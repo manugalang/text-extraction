@@ -1,23 +1,31 @@
-name: Deploy to AWS
+name: AWS CloudFormation Deploy
+
 on:
   push:
-    branches: [ main ] # This triggers every time you "push" code
+    branches: [ main ] # This triggers the deploy when you push to the main branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # Gets your code
+      # 1. Pulls your code from the GitHub repository
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Login to AWS
+      # 2. Authenticates with AWS using your stored Secrets
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Deploy CloudFormation
+      # 3. Deploys the CloudFormation template
+      - name: Deploy to AWS CloudFormation
         uses: aws-actions/aws-cloudformation-github-deploy@v1
         with:
           name: TextractStack
           template: template.yaml
+          no-fail-on-empty-changeset: "1"
+          # These capabilities allow AWS to create the IAM Role and the named Lambda function
+          capabilities: CAPABILITY_IAM, CAPABILITY_NAMED_IAM
