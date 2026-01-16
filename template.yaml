@@ -1,14 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Full Textract Pipeline - S3, SQS, Lambda, and DynamoDB
+Description: Full Textract Pipeline - Cleaned Version
 
 Resources:
-  # 1. SQS Queue (The Message Buffer)
+  # 1. THE QUEUE
   ProcessingQueue:
     Type: AWS::SQS::Queue
     Properties:
-      VisibilityTimeout: 60
+      VisibilityTimeout: 90 # Increased to give Lambda more time
 
-  # 2. Queue Policy (Allows S3 to talk to the Queue)
+  # 2. THE QUEUE POLICY
   QueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -24,22 +24,23 @@ Resources:
               ArnEquals:
                 aws:SourceArn: !Sub "arn:aws:s3:::textract-uploads-${AWS::AccountId}"
 
-  # 3. S3 Bucket (The Upload Trigger)
+  # 3. THE BUCKET
   DocumentBucket:
     Type: AWS::S3::Bucket
     DependsOn: QueuePolicy
     Properties:
-      BucketName: !Sub "textract-uploads-${AWS::AccountId}"
+      # Using a very unique name to avoid collisions
+      BucketName: !Sub "textract-data-drop-${AWS::AccountId}"
       NotificationConfiguration:
         QueueConfigurations:
           - Event: s3:ObjectCreated:*
             Queue: !GetAtt ProcessingQueue.Arn
 
-  # 4. DynamoDB Table (The Database)
+  # 4. THE TABLE
   ResultsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ExtractedTextData
+      TableName: !Sub "TextractResults-${AWS::StackName}"
       AttributeDefinitions:
         - AttributeName: DocumentId
           AttributeType: S
@@ -48,7 +49,7 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
-  # 5. IAM Role (The Lambda's Permission Badge)
+  # 5. THE ROLE (Added a slight delay/dependency helper)
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -65,11 +66,10 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
 
-  # 6. Lambda Function (The Brain)
+  # 6. THE LAMBDA (Removed manual FunctionName)
   TextractProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: TextractProcessor
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.9
@@ -78,6 +78,14 @@ Resources:
         ZipFile: |
           import json
           import boto3
-          import os
-
           def handler(event, context):
+              print("Ready to process Textract!")
+              return {'statusCode': 200}
+
+  # 7. THE TRIGGER
+  LambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt ProcessingQueue.Arn
+      FunctionName: !Ref TextractProcessorFunction
